@@ -8,27 +8,33 @@ import java.util.concurrent.CountDownLatch
 
 class MomondoParser {
 
-    static def countries = ["US", "RU", "DE", "AU", "CA", "AU", "UK", "FI", "EE", "FR", "IT", "CH", "SE"]
+    static def countries = ["US", "RU", "DE", "AU", "CA", "UK", "FI", "EE", "FR", "IT", "CH", "SE"]
 
     static def latch = new CountDownLatch(countries.size())
 
     // search properties
-    static def from = "TLV"
-    static def to = "FRA"
-    static def departureDate = "2099-01-01"
-    static def maxDuration = 1200
+    static def from = "MOW"
+    static def to = "MIL"
+    static def departureDate = "2000-01-01"
+    static def maxDurationHrs = 15
     static def is2way = true
-    static def fromReturn = "FRA"
-    static def toReturn = "TLV"
-    static def returnDate = "2099-01-01"
+    static def fromReturn = "MIL"
+    static def toReturn = "MOW"
+    static def returnDate = "2000-01-01"
+    static def proxyUrl = ""
 
-    public static void main(String[] args) {
+    static void main(String[] args) {
 
         def result = [] as ConcurrentLinkedQueue
         countries.each { country ->
             Thread.start {
-                result.addAll(scan(country))
-                latch.countDown()
+                try {
+                    result.addAll(scan(country))
+                } catch (Exception e) {
+                    println "Failed country $country $e.message"
+                } finally {
+                    latch.countDown()
+                }
             }
         }
 
@@ -38,7 +44,7 @@ class MomondoParser {
         latch.await()
 
         def sorted = result
-                .findAll { it.duration < maxDuration && it.price && it.currency && currencies[it.currency]}
+                .findAll { it.duration < (maxDurationHrs * 60) && it.price && it.currency && currencies[it.currency]}
                 .collect {
                     if (it.currency != 'EUR') {
                         it.price = (it.price as BigDecimal).divide(currencies[it.currency] as BigDecimal, MathContext.DECIMAL32)
@@ -54,9 +60,9 @@ class MomondoParser {
         Files.deleteIfExists(Paths.get(resultFileName))
         def file = new File(resultFileName)
         sorted.each { file << it.toCsv() }
-
+        println "Results stored in ${resultFileName}"
         sorted.eachWithIndex { flight, index ->
-            if (index < 20) println "Found ticket for $flight.price $flight.currency $flight.legs segments ($flight.duration/$flight.score) in $flight.country at $flight.url"
+            if (index < 20) println "Found ticket for $flight.price $flight.currency $flight.legs segments (${flight.duration / 60} hrs/score $flight.score) in $flight.country at $flight.url"
         }
     }
 
@@ -106,8 +112,8 @@ class MomondoParser {
 
         // it takes momondo around 20-30 secs to complete the search, also they can ban you for frequent queries
         Thread.sleep(30000)
-
-        while (inProcess) {
+        int retries = 10
+        while (inProcess && retries > 0) {
             println "Querying country $country"
             http.get(path: path + flightSearch, headers: headers) { _, reader ->
                 inProcess = !reader["Done"]
@@ -123,7 +129,7 @@ class MomondoParser {
                     println "Error ${reader['ErrorMessage']}"
                     return
                 }
-
+                retries--
             }
         }
         // search finished
@@ -154,7 +160,7 @@ class MomondoParser {
     }
 
     static def setProxy(http) {
-//        http.setProxy("localhost", 8080, 'http')
+        http.setProxy(proxyUrl.split(":")[0], Integer.parseInt(proxyUrl.split(":")[1]), 'http')
     }
 
     static def fetchRates() {
